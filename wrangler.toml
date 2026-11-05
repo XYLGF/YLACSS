@@ -1,0 +1,8 @@
+name = "acss-api"
+main = "worker.js"
+compatibility_date = "2024-03-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "acss-db"
+database_id = "f4e8de10-b579-4283-8d2f-e4a270e11860"
