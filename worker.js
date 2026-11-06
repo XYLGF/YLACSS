@@ -165,7 +165,7 @@ const HTML_TEMPLATE = `
   async function handleAuthorize(agree) {
     if (!agree) { window.location.href = returnUrl + (returnUrl.includes('?') ? '&' : '?') + 'error=access_denied'; return; }
     const token = btoa(userEmail + ":" + Date.now());
-    window.location.href = returnUrl + (returnUrl.includes('?') ? '&' : '?') + \`token=\${token}&username=\${encodeURIComponent(userName)}&avatar=\${encodeURIComponent(userAvatar)}\`;
+    window.location.href = returnUrl + (returnUrl.includes('?') ? '&' : '?') + 'token=' + token + '&username=' + encodeURIComponent(userName) + '&avatar=' + encodeURIComponent(userAvatar);
   }
 
   async function sendCode(inputId, btnId) {
@@ -173,7 +173,7 @@ const HTML_TEMPLATE = `
     if (!email) return alert("请输入邮箱");
     const btn = document.getElementById(btnId); btn.disabled = true; btn.innerText = "发送中...";
     try {
-      const res = await fetch(\`\${API_BASE}/api/send-code\`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      const res = await fetch(API_BASE + '/api/send-code', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
       if (res.ok) {
         let cd = 50; btn.innerText = cd + "s";
         const t = setInterval(() => { cd--; if (cd <= 0) { clearInterval(t); btn.disabled = false; btn.innerText = "点击获取"; } else { btn.innerText = cd + "s"; } }, 1000);
@@ -186,7 +186,7 @@ const HTML_TEMPLATE = `
     const password = document.getElementById("login-pwd").value;
     if (!email || !password) return alert("请填写完整");
     try {
-      const res = await fetch(\`\${API_BASE}/api/login\`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+      const res = await fetch(API_BASE + '/api/login', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
       const data = await res.json();
       if (res.ok) {
         localStorage.setItem("acss_email", data.email); localStorage.setItem("acss_name", data.nickname); localStorage.setItem("acss_avatar", data.avatar);
@@ -203,13 +203,13 @@ const HTML_TEMPLATE = `
     const password = document.getElementById("reg-pwd").value;
     if (!nickname || !email || !code || !password) return alert("请填全信息");
     try {
-      const res = await fetch(\`\${API_BASE}/api/register\`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nickname, email, code, password }) });
+      const res = await fetch(API_BASE + '/api/register', { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nickname, email, code, password }) });
       if (res.ok) { alert("注册成功！"); switchView("login"); } else alert(await res.text());
     } catch (e) { alert("网络错误"); }
   }
 
   async function doReset() {
-    alert("重置密码功能开发中...");
+    alert("重置密码功能暂未开放");
   }
 
   function logout() {
@@ -229,49 +229,79 @@ const HTML_TEMPLATE = `
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    
     if (url.pathname.startsWith("/api/")) {
-      const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+      const corsHeaders = { 
+        "Access-Control-Allow-Origin": "*", 
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS", 
+        "Access-Control-Allow-Headers": "Content-Type" 
+      };
       if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
       async function hashPassword(pwd) {
         const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
         return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('');
       }
+      
       try {
         if (request.method === "POST" && url.pathname === "/api/send-code") {
           const { email } = await request.json();
           const code = Math.floor(100000 + Math.random() * 900000).toString();
           const exp = new Date(Date.now() + 5 * 60 * 1000).toISOString();
           await env.DB.prepare("INSERT OR REPLACE INTO verify_codes (email, code, expires_at) VALUES (?, ?, ?)").bind(email, code, exp).run();
+          
+          // 注意这里的字符串拼接，避免使用反引号
           await fetch("https://api.resend.com/emails", {
-            method: "POST", headers: { "Authorization": \`Bearer \${env.RESEND_API_KEY}\`, "Content-Type": "application/json" },
-            body: JSON.stringify({ from: "YL Accounts <no-reply@xylplay.top>", to: [email], subject: "验证码", html: \`<h1>\${code}</h1>\` })
+            method: "POST", 
+            headers: { 
+              "Authorization": "Bearer " + env.RESEND_API_KEY, 
+              "Content-Type": "application/json" 
+            },
+            body: JSON.stringify({ 
+              from: "YL Accounts <no-reply@xylplay.top>", 
+              to: [email], 
+              subject: "验证码", 
+              html: "<h1>" + code + "</h1>" 
+            })
           });
           return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
         }
+        
         if (request.method === "POST" && url.pathname === "/api/register") {
           const { nickname, email, code, password } = await request.json();
           const rec = await env.DB.prepare("SELECT * FROM verify_codes WHERE email = ? AND code = ?").bind(email, code).first();
           if (!rec) return new Response("验证码错误", { status: 400, headers: corsHeaders });
+          
           const hash = await hashPassword(password);
           try {
             await env.DB.prepare("INSERT INTO users (email, password_hash, nickname, avatar) VALUES (?, ?, ?, '')").bind(email, hash, nickname).run();
             await env.DB.prepare("DELETE FROM verify_codes WHERE email = ?").bind(email).run();
             return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
-          } catch (e) { return new Response("邮箱已注册", { status: 400, headers: corsHeaders }); }
+          } catch (e) { 
+            return new Response("邮箱已注册", { status: 400, headers: corsHeaders }); 
+          }
         }
+        
         if (request.method === "POST" && url.pathname === "/api/login") {
           const { email, password } = await request.json();
           const hash = await hashPassword(password);
           const user = await env.DB.prepare("SELECT * FROM users WHERE email = ? AND password_hash = ?").bind(email, hash).first();
-          if (user) return new Response(JSON.stringify({ email: user.email, nickname: user.nickname || user.email, avatar: user.avatar || "" }), { headers: corsHeaders });
+          if (user) {
+            return new Response(JSON.stringify({ 
+              email: user.email, 
+              nickname: user.nickname || user.email, 
+              avatar: user.avatar || "" 
+            }), { headers: corsHeaders });
+          }
           return new Response("密码错误", { status: 401, headers: corsHeaders });
         }
-      } catch (e) { return new Response(e.message, { status: 500, headers: corsHeaders }); }
+      } catch (e) { 
+        return new Response(e.message, { status: 500, headers: corsHeaders }); 
+      }
     }
     
-    // 返回 HTML 模板，并动态注入图片 Base64
-    const finalHTML = HTML_TEMPLATE.replace(/\\\${LOGO_BASE64}/g, LOGO_BASE64);
+    // 替换 HTML 里的 Logo 变量
+    const finalHTML = HTML_TEMPLATE.split('\\\${LOGO_BASE64}').join(LOGO_BASE64);
     return new Response(finalHTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
   }
 };
