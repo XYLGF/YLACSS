@@ -39,9 +39,21 @@ const HTML_TEMPLATE = `
   .footer-links { display: flex; justify-content: space-between; margin-top: 20px; font-size: 14px; font-weight: 700; }
   .footer-links a { color: var(--blue); text-decoration: none; cursor: pointer; }
 
-  .avatar-large { width: 100px; height: 100px; border: 4px solid var(--line); border-radius: 50%; margin: 0 auto 20px; display: block; object-fit: cover; cursor: pointer; background: #eee; }
-  .profile-name { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 40px; cursor: pointer; }
+  /* 个人中心头像和名字 */
+  .avatar-large { width: 100px; height: 100px; border: 4px solid var(--line); border-radius: 50%; margin: 0 auto 20px; display: block; object-fit: cover; cursor: pointer; background: #eee; transition: opacity 0.2s; }
+  .avatar-large:hover { opacity: 0.8; }
+  .profile-name { text-align: center; font-size: 22px; font-weight: 700; margin-bottom: 40px; cursor: pointer; transition: color 0.2s; }
   .profile-name:hover { color: var(--blue); }
+
+  /* 内建弹窗 */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: none; justify-content: center; align-items: center; z-index: 100; }
+  .modal-overlay.active { display: flex; }
+  .modal-box { background: var(--bg); border: 4px solid var(--line); padding: 24px; width: 90%; max-width: 320px; text-align: center; }
+  .modal-box h3 { font-size: 18px; margin-bottom: 16px; }
+  .modal-box input { width: 100%; border: 4px solid var(--line); padding: 12px; font-size: 16px; outline: none; margin-bottom: 20px; background: transparent; font-weight: bold;}
+  .modal-actions { display: flex; justify-content: center; gap: 12px; }
+  .modal-actions button { flex: 1; padding: 10px; border: 4px solid var(--line); background: transparent; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .modal-actions button.primary { background: var(--blue); color: #000; border-color: var(--blue); }
 </style>
 </head>
 <body>
@@ -52,10 +64,9 @@ const HTML_TEMPLATE = `
       <img class="smart-logo" alt="YL">
       <h2>YL 账户中心</h2>
     </div>
-    <!-- 修复：默认隐藏这两个区块，由 JS 严格控制显示 -->
     <div id="about-profile" style="display: none;">
-      <img class="avatar-large" id="about-avatar" src="" title="点击修改头像">
-      <div class="profile-name" id="about-name" title="点击修改昵称">用户</div>
+      <img class="avatar-large" id="about-avatar" src="" title="点击修改头像" onclick="changeAvatar()">
+      <div class="profile-name" id="about-name" title="点击修改昵称" onclick="promptName()">用户</div>
       <button class="btn-outline" onclick="logout()">退出登录</button>
     </div>
     <div id="about-login-btn" style="display: none;">
@@ -123,24 +134,28 @@ const HTML_TEMPLATE = `
     <div class="footer-links"><a onclick="switchView('login')">返回登录</a></div>
   </div>
 
+  <!-- 改名弹窗 -->
+  <div class="modal-overlay" id="name-modal">
+    <div class="modal-box">
+      <h3>修改昵称</h3>
+      <input type="text" id="new-name-input" placeholder="请输入新昵称">
+      <div class="modal-actions">
+        <button onclick="document.getElementById('name-modal').classList.remove('active')">取消</button>
+        <button class="primary" onclick="saveName()">确认</button>
+      </div>
+    </div>
+  </div>
+
 <script>
   const API_BASE = "";
   const LOGO_URL = "https://data.cstcloud.cn/api/file/download/file/07436cf5-e708-4830-a900-5cf8560e7af7-4f45644423506e86bcaaef2257d4cd3d";
   const FALLBACK_BASE64 = "\\\${LOGO_BASE64}";
 
-  // 【智能测速加载图片】
-  // 原理：先加载外网图片，如果 3 秒内没加载完（针对海外慢速），立刻强制替换为本地 Base64
+  // 智能加载 Logo
   document.querySelectorAll('.smart-logo').forEach(img => {
-    let timer = setTimeout(() => {
-      img.src = FALLBACK_BASE64;
-    }, 3000);
-
+    let timer = setTimeout(() => { img.src = FALLBACK_BASE64; }, 3000);
     img.onload = () => { clearTimeout(timer); };
-    img.onerror = () => { 
-      clearTimeout(timer); 
-      img.src = FALLBACK_BASE64; 
-    };
-    
+    img.onerror = () => { clearTimeout(timer); img.src = FALLBACK_BASE64; };
     img.src = LOGO_URL;
   });
 
@@ -159,7 +174,6 @@ const HTML_TEMPLATE = `
   }
 
   function init() {
-    // 【修复核心】每次初始化前，先强制隐藏个人信息和提示框
     document.getElementById('about-profile').style.display = 'none';
     document.getElementById('about-login-btn').style.display = 'none';
 
@@ -186,6 +200,62 @@ const HTML_TEMPLATE = `
       document.getElementById('about-avatar').src = userAvatar || defaultAvatar;
     }
   }
+
+  // ========== 核心新增：修改名字和头像 ==========
+  function changeAvatar() {
+    const input = document.createElement("input"); 
+    input.type = "file"; 
+    input.accept = "image/*";
+    input.onchange = (e) => {
+      const file = e.target.files[0]; 
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas"); 
+          const ctx = canvas.getContext("2d");
+          const size = 150; canvas.width = size; canvas.height = size;
+          ctx.drawImage(img, 0, 0, size, size);
+          const base64 = canvas.toDataURL("image/jpeg", 0.8);
+          
+          fetch(API_BASE + "/api/profile", {
+            method: "POST", 
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: userEmail, avatar: base64 })
+          }).then(() => {
+            userAvatar = base64;
+            localStorage.setItem("acss_avatar", base64);
+            document.getElementById('about-avatar').src = base64;
+          });
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  }
+
+  function promptName() {
+    document.getElementById('new-name-input').value = userName || userEmail;
+    document.getElementById('name-modal').classList.add('active');
+  }
+
+  function saveName() {
+    const newName = document.getElementById('new-name-input').value.trim();
+    if (!newName) return;
+    fetch(API_BASE + "/api/profile", {
+      method: "POST", 
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: userEmail, nickname: newName })
+    }).then(() => {
+      userName = newName;
+      localStorage.setItem("acss_name", newName);
+      document.getElementById('about-name').innerText = newName;
+      document.getElementById('name-modal').classList.remove('active');
+    });
+  }
+  // ==========================================
 
   async function handleAuthorize(agree) {
     if (!agree) { window.location.href = returnUrl + (returnUrl.includes('?') ? '&' : '?') + 'error=access_denied'; return; }
@@ -287,6 +357,21 @@ export default {
           if (user) return new Response(JSON.stringify({ email: user.email, nickname: user.nickname || user.email, avatar: user.avatar || "" }), { headers: corsHeaders });
           return new Response("密码错误", { status: 401, headers: corsHeaders });
         }
+        
+        // 【新增】保存用户个人信息
+        if (request.method === "POST" && url.pathname === "/api/profile") {
+          const { email, nickname, avatar } = await request.json();
+          if (!email) return new Response("Missing email", { status: 400, headers: corsHeaders });
+          
+          if (nickname !== undefined) {
+            await env.DB.prepare("UPDATE users SET nickname = ? WHERE email = ?").bind(nickname, email).run();
+          }
+          if (avatar !== undefined) {
+            await env.DB.prepare("UPDATE users SET avatar = ? WHERE email = ?").bind(avatar, email).run();
+          }
+          return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        
       } catch (e) { return new Response(e.message, { status: 500, headers: corsHeaders }); }
     }
     
